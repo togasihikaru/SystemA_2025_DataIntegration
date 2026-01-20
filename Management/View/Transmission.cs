@@ -365,7 +365,8 @@ namespace Management
                         ProductId = r.Field<string>("商品番号"),
                         ProductName = r.Field<string>("商品名"),
                         Quantity = r.Field<int>("件数"),
-                        Price = 0m // 送受信ログには金額が無い想定のため 0 を設定
+                        DiscountAmount = 0m, // 送受信ログには割引額が無い想定のため 0 を設定
+                        SalesAmount = 0m     // 送受信ログには金額が無い想定のため 0 を設定
                     };
                     result.Add(rec);
                 }

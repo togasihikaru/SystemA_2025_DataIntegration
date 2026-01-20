@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Batch": {
+      "commandName": "Project",
+      "commandLineArgs": "string category = args[0];  //処理区分\r\nstring start = args[1];     //開始年月\r\nstring end = args[2];       //終了年月\r\n\r\n//店舗売上データ送信\r\nif (category == \"1\")\r\n{\r\n    Console.WriteLine(category);\r\n    Console.WriteLine(start);\r\n    Console.WriteLine(end);\r\n    Environment.Exit(0);\r\n}\r\n//店舗マスタ受信\r\nelse if (category == \"2\")\r\n{\r\n    Console.WriteLine(category);\r\n    Environment.Exit(1);\r\n}"
+    },
+    "WSL": {
+      "commandName": "WSL2",
+      "distributionName": ""
+    }
+  }
+}

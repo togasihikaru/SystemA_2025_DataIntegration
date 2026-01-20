@@ -2,18 +2,20 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms; // Windows Formsを使用
+using System.Windows.Forms;
 
 namespace Management
 {
-
     public partial class SalesData : Form
     {
-
         // 売上データレコードを表すクラス
         public class SalesRecord
         {
@@ -22,179 +24,153 @@ namespace Management
             public string ProductId { get; set; }
             public string ProductName { get; set; }
             public int Quantity { get; set; }
-            public decimal Price { get; set; }
-            // ... その他の項目
+            public decimal DiscountAmount { get; set; } // 割引適用額
+            public decimal SalesAmount { get; set; }    // 売上額
         }
 
-        // データを扱うクラスやヘルパー（前回の例で定義）をインスタンス化
+        // データを扱うクラスやヘルパー（Transmission を使用）
         private Transmission _accessor = new Transmission();
 
-        // 商品分類チェックボックスをグループ化するためのリスト (必要に応じて実際のコントロール名に修正)
-        private List<CheckBox> _categoryCheckBoxes = new List<CheckBox>();
-
-        // ※ デザイナーで定義された `_salesRecord` を使用するため、追加の DataGridView フィールドは不要
+        // 商品分類チェックボックスをグループ化するためのリスト
+        private readonly List<CheckBox> _categoryCheckBoxes = new List<CheckBox>();
 
         public SalesData()
         {
             InitializeComponent();
 
-            // デザイナーで配置した _salesRecord を初期設定
+            // DataGridView の基本設定（デザイナ配置の _salesRecord を想定）
             _salesRecord.AllowUserToAddRows = false;
             _salesRecord.AllowUserToDeleteRows = false;
             _salesRecord.ReadOnly = true;
-            _salesRecord.AutoGenerateColumns = false; // 明示的にカラムを設定する場合は false
+            _salesRecord.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
 
-            // デザイナーで配置したチェックボックスをリストに追加
+            // 画面幅に追従するようアンカーをセット（ボタンと重ならない高さ計算を行う）
+            _salesRecord.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _salesRecord.ScrollBars = ScrollBars.Vertical;
+
+            // 商品分類チェックボックスをリストに追加（Designer 上の名前に合わせる）
             _categoryCheckBoxes.Add(chkCategoryA);
             _categoryCheckBoxes.Add(chkCategoryB);
             _categoryCheckBoxes.Add(chkCategoryC);
             _categoryCheckBoxes.Add(chkCategoryD);
 
-            // デザイナでイベントが未接続の場合があるため、ここでイベントを接続
+            // 商品番号は半角数字のみ許可するイベント
+            txtProductId.KeyPress += TxtProductId_KeyPress;
+
+            // イベント接続（デザイナで未接続の場合に備える）
             btnSearch.Click += btnSearch_Click;
             btnClear.Click += btnClear_Click;
             btnSendSalesData.Click += btnSendSalesData_Click;
             btnRefresh.Click += btnRefresh_Click;
-            // Designer の閉じるボタン名は `button2` なので、既存の `btnClose_Click` を接続
             button2.Click += btnClose_Click;
+
+            Load += SalesData_Load;
         }
 
         private void SalesData_Load(object sender, EventArgs e)
         {
-            // --- 元の DataGridView 初期設定 （デザイナーの _salesRecord を使用） ---
-            // カラム数を指定
-            _salesRecord.ColumnCount = 7;
+            // 期間の初期設定 (現在年月)
+            var current = DateTime.Now;
+            txtStartDate.Text = current.ToString("yyyy/MM", CultureInfo.InvariantCulture);
+            txtEndDate.Text = current.ToString("yyyy/MM", CultureInfo.InvariantCulture);
 
-            // カラム名を指定
-            _salesRecord.Columns[0].HeaderText = "販売日時";
-            _salesRecord.Columns[1].HeaderText = "分類";
-            _salesRecord.Columns[2].HeaderText = "商品番号";
-            _salesRecord.Columns[3].HeaderText = "商品名";
-            _salesRecord.Columns[4].HeaderText = "売上数量";
-            _salesRecord.Columns[5].HeaderText = "割引適用額";
-            _salesRecord.Columns[6].HeaderText = "売上額";
-
-            // 表示用に枠内の行を確保（設計に合わせ最大15行）
-            _salesRecord.Rows.Clear();
-            for (int i = 0; i < 15; i++)
-            {
-                _salesRecord.Rows.Add();
-            }
-            // --- ここまで元のコード ---
-
-            // **1. 初期表示処理の追加**
-
-            // 期間の初期設定 (現在日時から年月を取得して開始・終了に設定)
-            string currentMonth = DateTime.Now.ToString("yyyy/MM");
-            txtStartDate.Text = currentMonth;
-            txtEndDate.Text = currentMonth;
-
-            // 商品分類の初期設定 (全項目にチェック)
+            // 商品分類を全チェックに
             CheckAllCategories();
 
-            // ボタンの初期状態設定
-            btnSendSalesData.Enabled = false; // 検索前は非活性
-            btnRefresh.Enabled = false;       // 検索前は非活性
+            // ボタン初期状態
+            btnSendSalesData.Enabled = false;
+            btnRefresh.Enabled = false;
 
-            // DataGridView の初期表示設定（幅調整、スクロールバー設定など）
+            // DataGridView 列をプログラム的に作成して DataPropertyName を設定（ヘッダ名固定）
+            CreateGridColumnsIfNeeded();
+
+            // 初期は枠内表示用の空行を表示（最大15行）
+            ClearGridToEmptyRows();
+
+            // グリッド表示調整（幅・高さ・スクロール）
             AdjustGridDisplay();
         }
 
-        // ===============================================
-        //           イベントハンドラの実装
-        // ===============================================
-
-        /// <summary>
-        /// 検索ボタン押下時の処理
-        /// </summary>
+        // 検索ボタン押下
         private void btnSearch_Click(object sender, EventArgs e)
         {
-            // 1. 変数の初期化と入力値の取得
-            DateTime startDate;
-            DateTime endDate;
+            // 入力値取得
             string productId = txtProductId.Text.Trim();
             string productName = txtProductName.Text.Trim();
-            List<string> selectedCategories = GetSelectedCategories();
+            var selectedCategories = GetSelectedCategories();
 
-            // 2. 入力チェック
-            if (!ValidateInput(productId, productName, selectedCategories, out startDate, out endDate))
-            {
-                return; // チェック失敗時はエラーメッセージ表示済みのため終了
-            }
-
-            try
-            {
-                // 3. データ取得
-                List<SalesRecord> salesList = _accessor.GetSalesData(
-                    startDate, endDate, selectedCategories, productId, productName);
-
-                // 4. データ一覧の表示
-                // デザイナーの _salesRecord にデータソースを設定
-                _salesRecord.DataSource = null;
-                _salesRecord.Rows.Clear();
-                _salesRecord.AutoGenerateColumns = true; // DataSource で自動カラムにする場合
-                _salesRecord.DataSource = salesList;
-                AdjustGridDisplay(); // グリッドの幅調整や行数制限を行う
-
-                // 5. ボタンの制御
-                btnSendSalesData.Enabled = true;
-                btnRefresh.Enabled = true;
-
-            }
-            catch (Exception ex)
-            {
-                // 6. 例外エラー処理
-                MessageBox.Show("売上データの検索中に予期せぬエラーが発生しました。\n" + ex.Message, "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                // エラーログ記録（実装必須）
-                LogError(ex);
-            }
-        }
-
-        /// <summary>
-        /// 条件クリアボタン押下時の処理
-        /// </summary>
-        private void btnClear_Click(object sender, EventArgs e)
-        {
-            // 期間の初期化 (現在日時の年月を設定)
-            string currentMonth = DateTime.Now.ToString("yyyy/MM");
-            txtStartDate.Text = currentMonth;
-            txtEndDate.Text = currentMonth;
-
-            // 商品分類の初期化 (全てチェック)
-            CheckAllCategories();
-
-            // その他の項目の初期化
-            txtProductId.Clear();
-            txtProductName.Clear();
-        }
-
-        /// <summary>
-        /// 売上データ送信ボタン押下時の処理
-        /// </summary>
-        private void btnSendSalesData_Click(object sender, EventArgs e)
-        {
-            // 1. 確認メッセージの表示
-            string confirmMsg = "選択されている期間の売上データを、期間以外の検索条件は反映せず、月別に全店舗管理サーバへ送信します。よろしいですか？";
-            DialogResult result = MessageBox.Show(confirmMsg, "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-
-            if (result == DialogResult.No)
+            // 入力チェックおよび期間変換
+            if (!ValidateInput(productId, productName, selectedCategories, out DateTime startDate, out DateTime endDate))
             {
                 return;
             }
 
-            // 2. 送信処理の実行（バッチ起動）
             try
             {
-                string startDate = txtStartDate.Text;
-                string endDate = txtEndDate.Text;
+                // データ取得（Transmission のラッパーを利用）
+                List<SalesRecord> salesList = _accessor.GetSalesData(startDate, endDate, selectedCategories, productId, productName) ?? new List<SalesRecord>();
 
-                // バッチ処理を起動し、リターンコードを取得
+                // DataSource にバインド（列は DataPropertyName でマップ済み）
+                _salesRecord.DataSource = null;
+                _salesRecord.Rows.Clear();
+                _salesRecord.AutoGenerateColumns = false;
+                _salesRecord.DataSource = new BindingList<SalesRecord>(salesList);
+
+                AdjustGridDisplay();
+
+                // ボタン活性化
+                btnSendSalesData.Enabled = true;
+                btnRefresh.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("売上データの検索中に予期せぬエラーが発生しました。\n" + ex.Message, "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                LogError(ex);
+            }
+        }
+
+        // 条件クリア
+        private void btnClear_Click(object sender, EventArgs e)
+        {
+            var current = DateTime.Now;
+            txtStartDate.Text = current.ToString("yyyy/MM", CultureInfo.InvariantCulture);
+            txtEndDate.Text = current.ToString("yyyy/MM", CultureInfo.InvariantCulture);
+
+            CheckAllCategories();
+
+            txtProductId.Clear();
+            txtProductName.Clear();
+
+            _salesRecord.DataSource = null;
+            _salesRecord.Rows.Clear();
+            ClearGridToEmptyRows();
+
+            btnSendSalesData.Enabled = false;
+            btnRefresh.Enabled = false;
+        }
+
+        // 売上データ送信（バッチ起動）
+        private void btnSendSalesData_Click(object sender, EventArgs e)
+        {
+            string confirmMsg = "選択されている期間の売上データを、期間以外の検索条件は反映せず、月別に全店舗管理サーバへ送信します。よろしいですか？";
+            DialogResult result = MessageBox.Show(confirmMsg, "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (result == DialogResult.No) return;
+
+            try
+            {
+                // 期間は UI の入力をそのまま渡す
+                string startDate = txtStartDate.Text.Trim();
+                string endDate = txtEndDate.Text.Trim();
+
                 int returnCode = StartBatchProcess(startDate, endDate);
 
-                // 3. リターンコードによる成否判定とメッセージ表示
-                if (returnCode == 0) // 0を正常終了と仮定
+                if (returnCode == 0)
                 {
                     MessageBox.Show("売上データの送信が完了しました。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else if (returnCode == -2)
+                {
+                    MessageBox.Show("売上データ送信バッチがタイムアウトしました。ログを確認してください。", "タイムアウト", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 else
                 {
@@ -203,28 +179,20 @@ namespace Management
             }
             catch (Exception ex)
             {
-                // バッチ起動自体に失敗した場合の処理
                 MessageBox.Show("売上データ送信バッチの起動中に予期せぬエラーが発生しました。\n" + ex.Message, "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 LogError(ex);
             }
         }
 
-        /// <summary>
-        /// 更新ボタン押下時の処理
-        /// </summary>
+        // 更新ボタン：現在の条件で再検索
         private void btnRefresh_Click(object sender, EventArgs e)
         {
-            // 検索ボタン押下のイベント処理を呼び出す
             btnSearch_Click(sender, e);
         }
 
-        /// <summary>
-        /// 閉じるボタン押下時の処理（ボタン名に応じてイベント名を設定）
-        /// 親フォーム（Top）が Owner に設定されていればそれを再表示してから閉じる
-        /// </summary>
+        // 閉じる
         private void btnClose_Click(object sender, EventArgs e)
         {
-            // Owner が設定されていれば再表示
             try
             {
                 if (this.Owner != null)
@@ -233,7 +201,6 @@ namespace Management
                 }
                 else
                 {
-                    // フォールバック: Application.OpenForms から Top を探して再表示
                     foreach (Form f in Application.OpenForms)
                     {
                         if (f is Top)
@@ -246,42 +213,40 @@ namespace Management
             }
             catch (Exception ex)
             {
-                // 念のため例外はログに出力して処理を継続
                 LogError(ex);
             }
 
             this.Close();
         }
 
-        // ===============================================
-        //           ヘルパーメソッドの実装（前回の設計内容）
-        // ===============================================
-
-        /// <summary>
-        /// 検索条件の入力チェックを実施する
-        /// </summary>
+        // 入力チェック（期間変換含む）
         private bool ValidateInput(string productId, string productName, List<string> categories, out DateTime startDate, out DateTime endDate)
         {
-            // ... (前回の回答のValidateInputメソッドの内容を実装) ...
             startDate = DateTime.MinValue;
             endDate = DateTime.MinValue;
 
-            // 期間チェック
-            if (!DateTime.TryParseExact(txtStartDate.Text, "yyyy/MM", null, System.Globalization.DateTimeStyles.None, out startDate) ||
-                !DateTime.TryParseExact(txtEndDate.Text, "yyyy/MM", null, System.Globalization.DateTimeStyles.None, out endDate))
+            if (!DateTime.TryParseExact(txtStartDate.Text.Trim(), "yyyy/MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime s) ||
+                !DateTime.TryParseExact(txtEndDate.Text.Trim(), "yyyy/MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime e))
             {
                 MessageBox.Show("期間は 'yyyy/MM' 形式で入力してください。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
 
-            // 商品分類チェック
-            if (categories.Count == 0)
+            startDate = new DateTime(s.Year, s.Month, 1);
+            endDate = new DateTime(e.Year, e.Month, DateTime.DaysInMonth(e.Year, e.Month), 23, 59, 59);
+
+            if (startDate > endDate)
+            {
+                MessageBox.Show("開始月は終了月以下で指定してください。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            if (categories == null || categories.Count == 0)
             {
                 MessageBox.Show("商品分類を一つ以上選択してください。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
 
-            // 商品番号チェック
             if (!string.IsNullOrEmpty(productId))
             {
                 if (productId.Length > 5 || !System.Text.RegularExpressions.Regex.IsMatch(productId, @"^\d+$"))
@@ -291,8 +256,7 @@ namespace Management
                 }
             }
 
-            // 商品名チェック
-            if (productName.Length > 30)
+            if (!string.IsNullOrEmpty(productName) && productName.Length > 30)
             {
                 MessageBox.Show("商品名は30文字以下で入力してください。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
@@ -301,25 +265,16 @@ namespace Management
             return true;
         }
 
-        /// <summary>
-        /// 選択されている商品分類名を取得する
-        /// </summary>
         private List<string> GetSelectedCategories()
         {
             var list = new List<string>();
             foreach (var chk in _categoryCheckBoxes)
             {
-                if (chk.Checked)
-                {
-                    list.Add(chk.Text);
-                }
+                if (chk.Checked) list.Add(chk.Text);
             }
             return list;
         }
 
-        /// <summary>
-        /// 全ての商品分類にチェックを入れる
-        /// </summary>
         private void CheckAllCategories()
         {
             foreach (var chk in _categoryCheckBoxes)
@@ -328,37 +283,353 @@ namespace Management
             }
         }
 
-        /// <summary>
-        /// DataGridViewの表示設定（幅調整、行数制限など）を行う
-        /// </summary>
         private void AdjustGridDisplay()
         {
-            // 横スクロールせずに全ての項目が表示できるよう幅を調整
-            _salesRecord.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells);
+            // 列幅をフォーム幅に合わせる（横スクロールを出さない）
+            _salesRecord.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
 
-            // 枠内に表示するデータ行数は最大15行とし、縦スクロールで続きが表示できること
-            // (これは Rows.Add() で行を予約しているか、データバインドの表示領域に依存します)
+            // DataGridView の表示可能領域を、下部ボタン群と重ならないように計算して高さを決定する。
+            // ボタンのトップ位置のうち最小値を取得（最も上にあるボタン）してそこまでを利用領域とする。
+            int gridTop = _salesRecord.Top;
+            int buttonsTop = int.MaxValue;
 
-            // 商品分類は検索条件の文言に合わせて表示すること（データバインド時に実施）
+            if (btnSendSalesData != null) buttonsTop = Math.Min(buttonsTop, btnSendSalesData.Top);
+            if (btnRefresh != null) buttonsTop = Math.Min(buttonsTop, btnRefresh.Top);
+            if (button2 != null) buttonsTop = Math.Min(buttonsTop, button2.Top);
+
+            // マージンを少し入れて重ならないようにする
+            int margin = 8;
+            int availableHeight = (buttonsTop == int.MaxValue) ? _salesRecord.Height : Math.Max(0, buttonsTop - gridTop - margin);
+
+            int rowHeight = _salesRecord.RowTemplate.Height;
+            int headerHeight = _salesRecord.ColumnHeadersHeight;
+
+            // 最低でも 3 行は表示するようにフォールバック
+            int minRows = 3;
+
+            int visibleRows;
+            if (availableHeight <= headerHeight + rowHeight * minRows)
+            {
+                visibleRows = minRows;
+            }
+            else
+            {
+                visibleRows = Math.Max(minRows, (availableHeight - headerHeight) / rowHeight);
+            }
+
+            // 高さを設定（ヘッダ + 行数 * 行高 + 微小マージン）
+            _salesRecord.Height = headerHeight + visibleRows * rowHeight + 4;
+
+            // データがはみ出す場合は縦スクロールで見られるようにする
+            _salesRecord.ScrollBars = ScrollBars.Vertical;
         }
 
-        /// <summary>
-        /// 外部のバッチ処理を起動し、終了コードを返す（仮実装）
-        /// </summary>
+        // 外部バッチを起動して終了コードを返す（実装）
+        // 戻り値:
+        //  - 正常終了: バッチの ExitCode をそのまま返す
+        //  - 起動に失敗/前処理エラー: -1
+        //  - タイムアウトで強制終了: -2
         private int StartBatchProcess(string startDate, string endDate)
         {
-            // 実際は System.Diagnostics.Process を使用して外部プロセスを実行
-            // 例: Process.Start("BatchSender.exe", $"{startDate} {endDate}");
-            return 0;
+            try
+            {
+                // UI の yyyy/MM 文字列をバッチが期待する yyyyMM に変換する
+                if (!DateTime.TryParseExact(startDate, "yyyy/MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime s) ||
+                    !DateTime.TryParseExact(endDate, "yyyy/MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime e))
+                {
+                    LogError(new ArgumentException("Start/End の期間書式が不正です。yyyy/MM 形式を指定してください。"));
+                    return -1;
+                }
+
+                string startArg = s.ToString("yyyyMM", CultureInfo.InvariantCulture);
+                string endArg = e.ToString("yyyyMM", CultureInfo.InvariantCulture);
+
+                // バッチ実行ファイルの探索（柔軟にいくつかの候補を探す）
+                string exePath = FindBatchExecutable();
+                if (string.IsNullOrEmpty(exePath))
+                {
+                    LogError(new FileNotFoundException("バッチ実行ファイルが見つかりません。Batch.exe / BatchSender.exe / Transmission.bat 等を検索しました。"));
+                    return -1;
+                }
+
+                bool isBatchScript = exePath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) || exePath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase);
+
+                // バッチは第1引数が処理区分（"1" = 送信）、続いて yyyyMM 形式の開始/終了
+                string arguments = isBatchScript
+                    ? $"1 {startArg} {endArg}"
+                    : $"1 \"{startArg}\" \"{endArg}\"";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = exePath,
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = Path.GetDirectoryName(exePath) ?? Application.StartupPath
+                };
+
+                var outputBuilder = new StringBuilder();
+
+                using (var proc = new Process { StartInfo = psi, EnableRaisingEvents = true })
+                {
+                    proc.OutputDataReceived += (sender, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(e.Data))
+                        {
+                            outputBuilder.AppendLine(e.Data);
+                            Debug.WriteLine(e.Data);
+                        }
+                    };
+                    proc.ErrorDataReceived += (sender, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(e.Data))
+                        {
+                            outputBuilder.AppendLine(e.Data);
+                            Debug.WriteLine(e.Data);
+                        }
+                    };
+
+                    if (!proc.Start())
+                    {
+                        LogError(new InvalidOperationException("バッチプロセスの起動に失敗しました。"));
+                        return -1;
+                    }
+
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+
+                    // タイムアウト（ミリ秒）：5 分をデフォルトに設定。必要なら調整可能。
+                    const int timeoutMs = 5 * 60 * 1000;
+
+                    bool exited = proc.WaitForExit(timeoutMs);
+                    if (!exited)
+                    {
+                        try
+                        {
+                            proc.Kill(entireProcessTree: true);
+                        }
+                        catch (Exception killEx)
+                        {
+                            LogError(killEx);
+                        }
+
+                        LogError(new TimeoutException($"バッチプロセスがタイムアウトしました（{timeoutMs / 1000}秒）。"));
+                        // 出力をログに残す
+                        WriteBatchLog(outputBuilder.ToString());
+                        return -2;
+                    }
+
+                    // プロセスが終了した後、リダイレクトの読み取り完了を待つ
+                    proc.WaitForExit();
+
+                    // 出力ログを保存
+                    WriteBatchLog(outputBuilder.ToString());
+
+                    return proc.ExitCode;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError(ex);
+                return -1;
+            }
         }
 
-        /// <summary>
-        /// エラーログを記録する（仮実装）
-        /// </summary>
+        // バッチ実行ファイルを探索してパスを返す。見つからなければ null を返す。
+        private string? FindBatchExecutable()
+        {
+            try
+            {
+                var candidates = new[]
+                {
+                    "Batch.exe",
+                    "BatchSender.exe",
+                    "BatchSender.bat",
+                    "Batch.bat",
+                    "Transmission.bat"
+                };
+
+                var searchFolders = new List<string>
+                {
+                    Application.StartupPath,
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    Environment.CurrentDirectory,
+                    Path.Combine(Application.StartupPath, "Batch", "bin", "Debug", "net8.0"),
+                    Path.Combine(Application.StartupPath, "Batch", "bin", "Release", "net8.0"),
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "Batch", "bin", "Debug", "net8.0"),
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "Batch", "bin", "Release", "net8.0")
+                };
+
+                var tried = new StringBuilder();
+
+                foreach (var folder in searchFolders.Where(f => !string.IsNullOrEmpty(f)).Select(f => Path.GetFullPath(f)).Distinct())
+                {
+                    foreach (var cand in candidates)
+                    {
+                        try
+                        {
+                            var full = Path.Combine(folder, cand);
+                            tried.AppendLine(full);
+                            if (File.Exists(full))
+                            {
+                                // 見つかったパスをログにも残す
+                                Debug.WriteLine($"FindBatchExecutable: found {full}");
+                                return full;
+                            }
+                        }
+                        catch
+                        {
+                            // 無視して次へ
+                        }
+                    }
+                }
+
+                // 見つからなかった場合は試したパス一覧を含めてログ出力
+                LogError(new FileNotFoundException("バッチ実行ファイルが見つかりません。試したパス:\r\n" + tried.ToString()));
+                return null;
+            }
+            catch (Exception ex)
+            {
+                LogError(ex);
+                return null;
+            }
+        }
+
+        // バッチ出力をログファイルに書く（失敗しても例外を投げない）
+        private void WriteBatchLog(string content)
+        {
+            try
+            {
+                string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Management", "BatchLogs");
+                Directory.CreateDirectory(logDir);
+                string file = Path.Combine(logDir, $"batch_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+                File.WriteAllText(file, content ?? string.Empty, Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                LogError(ex);
+            }
+        }
+
+        // エラーログ記録（簡易）
         private void LogError(Exception ex)
         {
-            // 例: ファイル、データベース、イベントログなどに例外情報を記録
-            System.Diagnostics.Debug.WriteLine($"[ERROR] {DateTime.Now}: {ex.Message}\n{ex.StackTrace}");
+            try
+            {
+                string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Management", "Logs");
+                Directory.CreateDirectory(logDir);
+                string logFile = Path.Combine(logDir, $"error_{DateTime.Now:yyyyMMdd}.log");
+                File.AppendAllText(logFile, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex.Message}\r\n{ex.StackTrace}\r\n\r\n");
+            }
+            catch
+            {
+                // ログ失敗は無視
+            }
+
+            Debug.WriteLine($"[ERROR] {DateTime.Now}: {ex.Message}\n{ex.StackTrace}");
+        }
+
+        // 商品番号入力は半角数字のみ許可
+        private void TxtProductId_KeyPress(object sender, KeyPressEventArgs e)
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+            {
+                e.Handled = true;
+            }
+        }
+
+        // DataGridView 列をプログラム的に作成（DataPropertyName を SalesRecord のプロパティに合わせる）
+        private void CreateGridColumnsIfNeeded()
+        {
+            if (_salesRecord.Columns.Count > 0) return;
+
+            _salesRecord.AutoGenerateColumns = false;
+            _salesRecord.Columns.Clear();
+
+            var colSalesDate = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.SalesDate),
+                HeaderText = "販売日時",
+                Name = "colSalesDate",
+                DefaultCellStyle = { Format = "yyyy/MM/dd HH:mm:ss" },
+                ReadOnly = true
+            };
+            _salesRecord.Columns.Add(colSalesDate);
+
+            var colCategory = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.CategoryName),
+                HeaderText = "分類",
+                Name = "colCategory",
+                ReadOnly = true
+            };
+            _salesRecord.Columns.Add(colCategory);
+
+            var colProductId = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.ProductId),
+                HeaderText = "商品番号",
+                Name = "colProductId",
+                ReadOnly = true
+            };
+            _salesRecord.Columns.Add(colProductId);
+
+            var colProductName = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.ProductName),
+                HeaderText = "商品名",
+                Name = "colProductName",
+                ReadOnly = true
+            };
+            _salesRecord.Columns.Add(colProductName);
+
+            var colQuantity = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.Quantity),
+                HeaderText = "売上数量",
+                Name = "colQuantity",
+                ReadOnly = true
+            };
+            _salesRecord.Columns.Add(colQuantity);
+
+            var colDiscount = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.DiscountAmount),
+                HeaderText = "割引適用額",
+                Name = "colDiscount",
+                ReadOnly = true,
+                DefaultCellStyle = { Format = "N2" }
+            };
+            _salesRecord.Columns.Add(colDiscount);
+
+            var colSalesAmount = new DataGridViewTextBoxColumn
+            {
+                DataPropertyName = nameof(SalesRecord.SalesAmount),
+                HeaderText = "売上額",
+                Name = "colSalesAmount",
+                ReadOnly = true,
+                DefaultCellStyle = { Format = "N2" }
+            };
+            _salesRecord.Columns.Add(colSalesAmount);
+        }
+
+        // DataGridView を空行で埋める（初期表示用）
+        private void ClearGridToEmptyRows()
+        {
+            // Columns が存在することを前提
+            if (_salesRecord.Columns.Count == 0) CreateGridColumnsIfNeeded();
+
+            _salesRecord.Rows.Clear();
+            for (int i = 0; i < 15; i++)
+            {
+                int idx = _salesRecord.Rows.Add();
+                // 空行なのでセルは空のまま
+            }
+
+            // 縦スクロールを有効にする
+            _salesRecord.ScrollBars = ScrollBars.Vertical;
         }
     }
 }

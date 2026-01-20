@@ -259,5 +259,6 @@
         private Button btnSendSalesData;
         private Button btnRefresh;
         private Button button2;
+        private DataGridViewTextBoxColumn 販売日時;
     }
 }
