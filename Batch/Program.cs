@@ -16,16 +16,16 @@ namespace Batch
     internal class Program
     {
         /// <summary>送信フォルダ</summary>
-        private const string SendFolder = @"D:\SystemA\snd";
+        private const string SendFolder = @"D:\SystemA\23180047\snd";
 
         /// <summary>受信フォルダ</summary>
-        private const string RcvFolder = @"D:\SystemA\rcv";
+        private const string RcvFolder = @"D:\SystemA\23180047\rcv";
 
         /// <summary>処理済み受信フォルダ</summary>
-        private const string ArchiveRcvFolder = @"D:\SystemA\rcv\archive";
+        private const string ArchiveRcvFolder = @"D:\SystemA\23180047\rcv\archive";
 
         /// <summary>エラー受信フォルダ</summary>
-        private const string ErrorRcvFolder = @"D:\SystemA\rcv\error";
+        private const string ErrorRcvFolder = @"D:\SystemA\23180047\rcv\error";
 
         /// <summary>
         /// エントリーポイント
